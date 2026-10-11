@@ -27,6 +27,22 @@
   };
   if (/[?&]reset\b/.test(location.search)) { store.wipe(); history.replaceState(null, '', location.pathname + location.hash); }
 
+  /* Версия сайта = число после ?v= в index.html. Страницу index.html браузер/хостинг кэшируют (GitHub Pages — 10 минут),
+     поэтому телефон может показывать старую версию, пока не обновится. Сверяем с живой копией и один раз перезагружаемся. */
+  const SCRIPT = document.currentScript;
+  const SITE_V = ((SCRIPT && SCRIPT.src || '').match(/[?&]v=(\d+)/) || [])[1] || '';
+  if (SITE_V && /^https?:/.test(location.protocol)) {
+    try {
+      fetch('index.html?_=' + Date.now(), { cache: 'no-store' }).then((r) => r.text()).then((t) => {
+        const m = t.match(/app\.js\?v=(\d+)/);
+        if (m && m[1] !== SITE_V && !sessionStorage.getItem('quest.upd.' + m[1])) {
+          sessionStorage.setItem('quest.upd.' + m[1], '1');
+          location.replace(location.pathname + '?r=' + m[1] + location.hash);
+        }
+      }).catch(() => { /* нет сети — остаёмся на текущей версии */ });
+    } catch (e) { /* ok */ }
+  }
+
   /* ───────────── порядок и прогресс ───────────── */
   function validOrder(o) {
     return Array.isArray(o) && o.length === GODS.length && new Set(o.map(Number)).size === o.length && o.every((n) => byId(n));
@@ -230,6 +246,7 @@
     scroll.type = 'button';
     scroll.addEventListener('click', () => { Sound.init(); Sound.click(); showPrologue(true); });
     foot.appendChild(scroll);
+    if (SITE_V) foot.appendChild(el('div', 'hub-ver', 'версия ' + SITE_V));
     mount(wrap);
 
     /* только что открылся новый бог */

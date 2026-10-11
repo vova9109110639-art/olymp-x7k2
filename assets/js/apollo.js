@@ -46,7 +46,15 @@ window.Apollo = (function () {
     const verseNotes = (v) => (Array.isArray(v) ? v : v.notes);
     const OFF = +cfg.AUDIO_OFFSET || 0;      // задержка звука (динамик ≈ 0.05 с, Bluetooth-наушники ≈ 0.15–0.25 с): ноты сдвигаются на неё
     if (!verses.length) { alert('В config.js не задан ни один куплет (APOLLO.VERSES).'); return; }
-    const BPM = cfg.BPM || 84, BEAT = 60 / BPM, TOL = cfg.TOLERANCE || 1.1, HIT = cfg.HIT_RATIO || 0.5;
+    const BPM = cfg.BPM || 84, BEAT = 60 / BPM, TOL0 = cfg.TOLERANCE || 1.1, HIT = cfg.HIT_RATIO || 0.5;
+    /* Облегчения (все настраиваются в config.js → APOLLO):
+       MIN_NOTE — ноты короче этого (сек) склеиваются в одну длинную: слова речитатива звучат по 0.2–0.3 с, угнаться за ними голосом нереально;
+       MAX_GAP — пауза длиннее этой не склеивается;  PASS_RATIO — какая доля нот куплета должна быть спета (1 = без единого промаха);
+       KEY_FREE — «чужая тональность»: игра подстраивается под высоту голоса поющего (важна мелодия, а не абсолютная нота);
+       ASSIST — после каждой неудачной попытки куплета допуск шире, а нужная доля меньше. */
+    const MIN_NOTE = +cfg.MIN_NOTE || 0, MAX_GAP = cfg.MAX_GAP != null ? +cfg.MAX_GAP : 0.5;
+    const PASS = cfg.PASS_RATIO != null ? +cfg.PASS_RATIO : 1;
+    const KEY_FREE = !!cfg.KEY_FREE, KEY_TAU = 3, KEY_MAX = 4, ASSIST = cfg.ASSIST !== false;
     const saved = load();
     const got = verses.map((_, i) => !!(saved.done && saved.done[i]));
     const color = opts.color || '#D9A441';
@@ -89,8 +97,10 @@ window.Apollo = (function () {
       verse: 0, t0: 0, songTime: -4 * BEAT, notes: [], dur: 0,
       micOK: false, demo: false, demoDown: false, demoMidi: 64,
       ballMidi: (lo + hi) / 2, octK: 0, voicedAt: -1e9, lastVoicedMidi: null, hist: [],
-      rms: 0, trail: [], misses: 0, hits: 0, lastPenalty: 0, guideIdx: 0, backtrack: null, raf: 0, frame: 0
+      rms: 0, trail: [], misses: 0, hits: 0, lastPenalty: 0, guideIdx: 0, backtrack: null, raf: 0, frame: 0,
+      tol: TOL0, need: PASS, fails: [], keyOff: 0, fresh: false
     };
+    ov._S = S;   // для проверки организатором
     let actx = null, analyser = null, stream = null, tbuf = null;
 
     /* ───── интерфейс ───── */
@@ -109,7 +119,7 @@ window.Apollo = (function () {
       S.mode = 'intro';
       setCenter(
         '<h2>Спой, и шарик взлетит</h2>' +
-        '<p>Нужны наушники и микрофон. Пой в удобной для себя октаве — важна только мелодия: ноты едут к шарику слева, а голос ведёт его вверх и вниз.</p>' +
+        '<p>Нужен микрофон. Пой так, как тебе удобно, — важна только мелодия: длинные ноты едут к шарику слева, а голос ведёт его вверх и вниз. Не нужно попадать в каждое слово: держи высоту, пока нота рядом с шариком. Куплету хватит большей части нот.</p>' +
         (msg ? '<p class="ap-err">' + esc(msg) + '</p>' : '') +
         '<button class="px-btn gold big" type="button" id="ap-mic">Разрешить микрофон</button>' +
         '<button class="ap-link" type="button" id="ap-demo">проверка без голоса (для организатора)</button>', 'intro');
@@ -139,10 +149,32 @@ window.Apollo = (function () {
     const firstOpen = () => { const i = got.findIndex((g) => !g); return i < 0 ? 0 : i; };
 
     /* ───── куплет ───── */
+    /* склейка коротких нот: группа закрывается, когда набрала MIN_NOTE секунд или после паузы длиннее MAX_GAP;
+       высота — медиана нот группы с весом по длительности */
+    function simplify(list) {
+      const out = []; let grp = [];
+      const flush = () => {
+        if (!grp.length) return;
+        const tot = grp.reduce((a, n) => a + (n[2] - n[1]), 0);
+        let acc = 0, med = grp[0][0];
+        for (const n of grp.slice().sort((a, b) => a[0] - b[0])) { acc += n[2] - n[1]; if (acc >= tot / 2) { med = n[0]; break; } }
+        out.push([med, grp[0][1], grp[grp.length - 1][2]]); grp = [];
+      };
+      list.forEach((n) => {
+        if (grp.length && n[1] - grp[grp.length - 1][2] > MAX_GAP) flush();
+        if (grp.length && grp[grp.length - 1][2] - grp[0][1] >= MIN_NOTE) flush();
+        grp.push(n);
+      });
+      flush();
+      /* одиночные совсем короткие ноты (после паузы с обеих сторон) спеть невозможно — их не требуем */
+      const keep = out.filter((n) => n[2] - n[1] >= 0.35);
+      return keep.length >= 3 ? keep : out;
+    }
+
     function buildNotes(vi) {
       const vv = verses[vi];
       if (!Array.isArray(vv)) {                 // новый формат: время в секундах
-        const out2 = vv.notes.map(([m, s, e]) => ({ m, s, e, inBand: 0, total: 0, state: 'wait' }));
+        const out2 = (MIN_NOTE > 0 ? simplify(vv.notes) : vv.notes).map(([m, s, e]) => ({ m, s, e, inBand: 0, total: 0, state: 'wait' }));
         S.dur = Math.max(vv.dur || 0, ...out2.map((n) => n.e)) + 1.2;
         return out2;
       }
@@ -158,6 +190,8 @@ window.Apollo = (function () {
     function startVerse(vi) {
       S.verse = vi; paintVerse();
       S.notes = buildNotes(vi); S.misses = 0; S.hits = 0; S.guideIdx = 0; S.trail.length = 0;
+      const assist = ASSIST ? Math.min(3, S.fails[vi] || 0) : 0;       // сколько раз подряд куплет не удавался
+      S.tol = TOL0 + 0.4 * assist; S.need = PASS >= 1 ? 1 : Math.max(0.45, PASS - 0.07 * assist);
       S.lines = Array.isArray(verses[vi]) ? null : (verses[vi].lines || null); S.lineIdx = -2; lyricsEl.replaceChildren();
       S.mode = 'count';
       const lead = 4 * BEAT;
@@ -197,16 +231,20 @@ window.Apollo = (function () {
 
     function endVerse() {
       S.mode = 'result'; stopBacktrack();
-      const clean = S.misses === 0;
+      const total = S.notes.length, need = Math.max(1, Math.ceil(total * S.need - 1e-9));
+      const clean = S.hits >= need;
       if (clean) {
+        S.fails[S.verse] = 0;
         got[S.verse] = true; const sv = load(); sv.done = got.slice(); save(sv);
         Sound.success(); paintCode();
-      } else Sound.fail();
+      } else { S.fails[S.verse] = (S.fails[S.verse] || 0) + 1; Sound.fail(); }
       const allGot = got.every(Boolean);
       const nextI = got.findIndex((g, i) => !g && i !== S.verse);
+      const easier = ASSIST && !clean && S.fails[S.verse] <= 3;
       setCenter(
-        '<h2>' + (clean ? 'Куплет чист!' : 'Куплет не засчитан') + '</h2>' +
-        '<p>' + (clean ? 'Куплет пройден.' : 'Промахов: ' + S.misses + '. Спой ещё раз — боги терпеливы.') + '</p>' +
+        '<h2>' + (clean ? (S.misses === 0 ? 'Куплет чист!' : 'Куплет спет!') : 'Куплет не засчитан') + '</h2>' +
+        '<p>' + (clean ? 'Нот спето: ' + S.hits + ' из ' + total + '.'
+                       : 'Нот спето: ' + S.hits + ' из ' + total + ', нужно хотя бы ' + need + '. Спой ещё раз — боги терпеливы' + (easier ? ', и ноты станут чуть шире.' : '.')) + '</p>' +
         (allGot ? '<p>Все куплеты спеты. Аполлон доволен!</p><button class="px-btn gold big" type="button" id="ap-done">Готово</button>'
                  : clean ? '<button class="px-btn gold big" type="button" id="ap-next">Дальше</button>'
                  : '<button class="px-btn gold big" type="button" id="ap-again">Спеть ещё раз</button>'), 'result');
@@ -220,7 +258,7 @@ window.Apollo = (function () {
     function readPitch(dt) {
       if (S.demo) {
         S.rms = S.demoDown ? 0.5 : 0;
-        if (S.demoDown) { S.voicedAt = performance.now(); S.lastVoicedMidi = S.demoMidi; }
+        if (S.demoDown) { S.voicedAt = performance.now(); S.lastVoicedMidi = S.demoMidi; S.fresh = true; }
         return;
       }
       if (!analyser) return;
@@ -234,7 +272,7 @@ window.Apollo = (function () {
           S.hist.push(freqToMidi(f)); if (S.hist.length > 5) S.hist.shift();
           const sorted = S.hist.slice().sort((a, b) => a - b);
           S.lastVoicedMidi = sorted[sorted.length >> 1];
-          S.voicedAt = performance.now();
+          S.voicedAt = performance.now(); S.fresh = true;
         }
       }
       if (S.rms <= thr) S.hist.length = 0;
@@ -250,31 +288,41 @@ window.Apollo = (function () {
     }
 
     function updateBall(dt) {
-      const voiced = performance.now() - S.voicedAt < 150;
+      const voiced = performance.now() - S.voicedAt < 250;       // короткие провалы определения тона (согласные) не роняют шарик
       S.voiced = voiced;
       const tgt = currentTarget();
       if (voiced && S.lastVoicedMidi != null) {
         let m = S.lastVoicedMidi;
         if (cfg.OCTAVE_FREE !== false) {
-          const ref = tgt ? tgt.m : S.ballMidi;
+          const ref = (tgt ? tgt.m : S.ballMidi) + (KEY_FREE ? S.keyOff : 0);
           const cand = m + 12 * S.octK;
           if (Math.abs(cand - ref) > 7) S.octK = Math.round((ref - m) / 12);
           m += 12 * S.octK;
         }
+        if (KEY_FREE) {
+          /* подстройка под тональность певца: медленно «догоняем» разницу между его голосом и нотой */
+          if (S.fresh && tgt && S.songTime >= tgt.s && S.songTime <= tgt.e) {
+            const diff = Math.max(-7, Math.min(7, m - tgt.m));
+            S.keyOff += (diff - S.keyOff) * Math.min(1, dt / KEY_TAU);
+            S.keyOff = Math.max(-KEY_MAX, Math.min(KEY_MAX, S.keyOff));
+          }
+          m -= S.keyOff;
+        }
         m = Math.max(lo, Math.min(hi, m));
         S.ballMidi += (m - S.ballMidi) * Math.min(1, dt * 14);
       } else {
-        S.ballMidi = Math.max(lo, S.ballMidi - dt * 5);
+        S.ballMidi = Math.max(lo, S.ballMidi - dt * 3);
       }
+      S.fresh = false;
     }
 
     function judge(dt) {
       for (const n of S.notes) {
         if (n.state === 'done') continue;
-        const len = n.e - n.s, ws = n.s + Math.min(0.2, len * 0.3), we = n.e - Math.min(0.06, len * 0.1);
+        const len = n.e - n.s, ws = n.s + Math.min(0.4, len * 0.3), we = n.e - Math.min(0.06, len * 0.1);   // начало ноты — время, чтобы взять высоту
         if (S.songTime >= ws && S.songTime <= we) {
           n.total += dt;
-          if (S.voiced && Math.abs(S.ballMidi - n.m) <= TOL) n.inBand += dt;
+          if (S.voiced && Math.abs(S.ballMidi - n.m) <= S.tol) n.inBand += dt;
           n.state = 'live';
         }
         if (S.songTime > we && n.state !== 'done') {
@@ -299,7 +347,7 @@ window.Apollo = (function () {
       }
       ctx.fillStyle = 'rgba(255,226,138,.18)'; ctx.fillRect(ballX, 0, 1, lh);
       /* ноты */
-      const bandH = Math.max(5, Math.round(TOL * 2 * semi));
+      const bandH = Math.max(5, Math.round(S.tol * 2 * semi));
       for (const n of S.notes) {
         const x0 = Math.round(ballX + (n.s - S.songTime) * pps), w = Math.max(3, Math.round((n.e - n.s) * pps));
         if (x0 > lw || x0 + w < 0) continue;
@@ -311,7 +359,7 @@ window.Apollo = (function () {
         ctx.fillStyle = hl; ctx.fillRect(x0 + 1, y0, w - 2, 1);
         ctx.fillStyle = sh; ctx.fillRect(x0 + 1, y0 + bandH - 1, w - 2, 1);
         ctx.fillStyle = '#0a0820'; ctx.fillRect(x0, y0, 1, 1); ctx.fillRect(x0 + w - 1, y0, 1, 1); ctx.fillRect(x0, y0 + bandH - 1, 1, 1); ctx.fillRect(x0 + w - 1, y0 + bandH - 1, 1, 1);
-        if (n.state === 'live' && S.voiced && Math.abs(S.ballMidi - n.m) <= TOL) {
+        if (n.state === 'live' && S.voiced && Math.abs(S.ballMidi - n.m) <= S.tol) {
           ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(x0 + 1, y0 + 1, w - 2, bandH - 2);
         }
       }
@@ -428,7 +476,7 @@ window.Apollo = (function () {
       stopBacktrack();
       endVerseAsClean();
     });
-    function endVerseAsClean() { S.misses = 0; S.mode = 'play'; S.songTime = S.dur; endVerse(); }
+    function endVerseAsClean() { S.misses = 0; S.hits = S.notes.length; S.mode = 'play'; S.songTime = S.dur; endVerse(); }
 
     $('.ap-close', ov).addEventListener('click', close);
     const onKey = (e) => { if (e.key === 'Escape') close(); };
