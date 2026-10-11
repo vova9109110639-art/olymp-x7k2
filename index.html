@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0d1240">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Дары Олимпа</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,700;1,500&family=EB+Garamond:ital@0;1&family=Forum&family=Press+Start+2P&display=swap" rel="stylesheet">
+  <!-- cache-версия: после правок файлов в assets/ увеличь число v=24 (во всех строках ниже), чтобы телефон не показывал старую версию -->
+  <link rel="stylesheet" href="assets/css/style.css?v=24">
+</head>
+<body class="pre" data-route="hub">
+
+  <!-- фон: пиксельная сцена (хаб) и тематический фон (страницы богов) -->
+  <canvas id="scene" aria-hidden="true"></canvas>
+  <div id="stage" aria-hidden="true"><canvas class="stage-sprite" width="16" height="16"></canvas></div>
+
+  <!-- содержимое экранов -->
+  <main id="view"></main>
+
+  <!-- эффекты поверх -->
+  <canvas id="particles" aria-hidden="true"></canvas>
+  <canvas id="bolt" aria-hidden="true"></canvas>
+  <div id="flash" aria-hidden="true"></div>
+  <canvas id="transition" aria-hidden="true"></canvas>
+  <div id="veil" aria-hidden="true"></div>
+
+  <!-- кнопка звука -->
+  <button id="sound-btn" class="sound-btn" type="button" aria-label="Звук"></button>
+  <div id="toast" role="status"></div>
+  <div id="overlay-root"></div>
+
+  <!-- вход в храм (нужен клик, чтобы включить звук) -->
+  <div id="enter" class="enter">
+    <div class="enter-inner">
+      <div class="enter-sprite"></div>
+      <div class="greek">ΔΩΡΑ ΤΟΥ ΟΛΥΜΠΟΥ</div>
+      <h1 class="title">ДАРЫ ОЛИМПА</h1>
+      <div class="meander"></div>
+      <p class="enter-sub">Девять подвигов для <span id="enter-name">Юли</span></p>
+      <button id="enter-btn" class="px-btn gold big" type="button">Войти в храм</button>
+      <p class="enter-note">Лучше всего — со звуком и в наушниках</p>
+    </div>
+  </div>
+
+  <noscript><p style="position:fixed;inset:0;display:grid;place-items:center;background:#0d1240;color:#f3ead3;font:20px serif;text-align:center;padding:24px">Для входа на Олимп нужен JavaScript.</p></noscript>
+
+  <script src="assets/js/config.js?v=24"></script>
+  <script src="assets/js/song.js?v=24"></script>
+  <script src="assets/js/gods.js?v=24"></script>
+  <script src="assets/js/sprites.js?v=24"></script>
+  <script src="assets/js/audio.js?v=24"></script>
+  <script src="assets/js/fx.js?v=24"></script>
+  <script src="assets/js/scene.js?v=24"></script>
+  <script src="assets/js/apollo.js?v=24"></script>
+  <script src="assets/js/trials.js?v=24"></script>
+  <script src="assets/js/trials2.js?v=24"></script>
+  <script src="assets/js/tools.js?v=24"></script>
+  <script src="assets/js/app.js?v=24"></script>
+</body>
+</html>
