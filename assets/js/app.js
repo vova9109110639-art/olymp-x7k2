@@ -1,4 +1,4 @@
-/* Дары Олимпа — логика сайта: хаб, страницы богов, печати-коды, тайная дверь, админ-панель. */
+/* Дары Олимпа — логика сайта: хаб, страницы богов, печати станций, финал, админ-панель. */
 (function () {
   'use strict';
   const CFG = window.QUEST_CONFIG, GODS = window.GODS;
@@ -34,7 +34,7 @@
   const ORDER = validOrder(CFG.ORDER) ? CFG.ORDER.map(Number) : null;
   const SETUP = !ORDER;
 
-  const state = { done: store.get('done', []), gateOpen: !!store.get('gateOpen', false), entered: false, adminOK: false };
+  const state = { done: store.get('done', []), entered: false, adminOK: false };
   function syncDone() {
     if (!ORDER) { state.done = []; return; }
     let n = 0;
@@ -50,13 +50,6 @@
   }
   const allDone = () => !SETUP && state.done.length >= ORDER.length;
   const nextId = () => (SETUP || allDone() ? null : ORDER[state.done.length]);
-
-  function toCode(c) {
-    if (c == null || c === '') return null;
-    const a = Array.isArray(c) ? c.map(Number) : String(c).replace(/\D/g, '').split('').map(Number);
-    return a.length && a.every((n) => byId(n)) ? a : null;
-  }
-  const FINAL = toCode(CFG.FINAL_CODE) || (ORDER ? ORDER.slice() : null);
 
   /* ───────────── мелочи интерфейса ───────────── */
   let toastT = 0;
@@ -96,7 +89,7 @@
   }
 
   /* ───────────── маршрутизация и переходы ───────────── */
-  let busy = false, silent = 0, cleanups = [], pendingFocus = null, justKey = null;
+  let busy = false, silent = 0, cleanups = [], pendingFocus = null, justKey = null, justFinished = false;
   function addCleanup(fn) { cleanups.push(fn); }
   function runCleanups() { const c = cleanups; cleanups = []; c.forEach((f) => { try { f(); } catch (e) { /* ok */ } }); }
 
@@ -129,7 +122,6 @@
       if (status(g.id) === 'locked') { silent++; location.replace('#/'); toast('Этот бог ещё спит. Сначала — другой подвиг.'); return renderHub(); }
       return renderGod(g);
     }
-    if (parts[0] === 'gate') return renderGate();
     if (parts[0] === 'admin') return renderAdmin();
     return renderHub();
   }
@@ -221,12 +213,18 @@
       }
     }
     if (allDone()) {
-      const door = el('a', 'secret-door');
-      door.href = '#/gate';
-      door.innerHTML = '<span class="door-arch"></span><span class="door-txt"><span class="greek">ΘΥΡΑ</span>Тайная дверь</span>';
-      door.querySelector('.door-arch').appendChild(Sprites.clone('lock', '#ffffff'));
-      door.addEventListener('click', (e) => { e.preventDefault(); Sound.init(); go('#/gate', { color: '#2a1d0a', sprite: Sprites.clone('lock', '#ffffff', 'veil-sprite'), greek: 'ΘΥΡΑ', label: 'Тайная дверь' }); });
-      foot.appendChild(door);
+      /* последняя станция (ящик Пандоры) пройдена: вместо двери — финальная плашка */
+      const fin = CFG.FINALE || {};
+      const card = el('div', 'finale-card pxbox');
+      card.innerHTML =
+        '<div class="greek">ΤΕΛΟΣ</div>' +
+        '<h2>' + esc(fin.title || 'Девять подвигов позади') + '</h2>' +
+        (fin.lines || []).map((t) => '<p>' + esc(sub(t)) + '</p>').join('');
+      foot.appendChild(card);
+      if (justFinished) {
+        justFinished = false;
+        setTimeout(() => { Sound.unlock(); FX.lightning(innerWidth / 2); FX.rain(['#ffe28a', '#f3c24f', '#ffffff'], 140); }, 900);
+      }
     }
     const scroll = el('button', 'px-btn small ghost', 'Свиток пролога');
     scroll.type = 'button';
@@ -406,7 +404,6 @@
      auto=true — печати нет на странице, станцию завершает игра внутри (wrap.complete()). */
   function buildSeal(g, page, auto) {
     const wrap = el('section', 'seal');
-    const k = SETUP ? null : ORDER.indexOf(g.id) + 1;
     const isDone = !SETUP && status(g.id) === 'done';
 
     function showOk(justNow) {
@@ -417,24 +414,15 @@
           '<div class="stamp"></div>' +
           '<h2>' + (justNow ? 'Печать скреплена!' : 'Подвиг пройден') + '</h2>' +
           (g.key ? '<div class="got-key"><span class="gk-ico"></span><span>Ключ добавлен в связку</span></div>' : '') +
-          (SETUP ? '' :
-          '<div class="passport">' +
-            '<div class="pp-label">Впиши в Паспорт Странника</div>' +
-            '<div class="pp-row"><span>клетка</span><b class="pp-cell"></b><span>число</span><b class="pp-num"></b></div>' +
-          '</div>') +
-          '<p class="seal-next">' + (SETUP ? 'Режим настройки: прогресс не сохраняется.' : all ? 'Девять подвигов позади. Олимп явил тайную дверь…' : nxt ? 'Олимп открывает следующую дверь…' : '') + '</p>' +
-          '<button class="px-btn gold big" type="button" id="back-btn">' + (all && justNow ? 'К тайной двери' : 'Вернуться на Олимп') + '</button>' +
+          '<p class="seal-next">' + (SETUP ? 'Режим настройки: прогресс не сохраняется.' : all ? esc(sub((CFG.FINALE && CFG.FINALE.seal) || 'Девять подвигов позади.')) : nxt ? 'Олимп открывает следующую дверь…' : '') + '</p>' +
+          '<button class="px-btn gold big" type="button" id="back-btn">Вернуться на Олимп</button>' +
         '</div>';
       $('.stamp', wrap).appendChild(Sprites.clone('check', '#ffffff'));
       if (g.key) $('.gk-ico', wrap).appendChild(Sprites.clone('key', g.color));
-      if (!SETUP) {
-        $('.pp-cell', wrap).appendChild(Sprites.digits(k, { color: '#3a2412' }));
-        $('.pp-num', wrap).appendChild(Sprites.digits(g.id, { color: '#3a2412' }));
-      }
       $('#back-btn', wrap).addEventListener('click', () => {
         Sound.click();
-        if (all && justNow) go('#/gate', { color: '#2a1d0a', sprite: Sprites.clone('lock', '#ffffff', 'veil-sprite'), greek: 'ΘΥΡΑ', label: 'Тайная дверь' });
-        else { pendingFocus = justNow ? nxt : null; go('#/', { color: '#1a1536', greek: 'ΟΛΥΜΠΟΣ', label: 'Олимп' }); }
+        pendingFocus = justNow ? nxt : null;
+        go('#/', { color: '#1a1536', greek: 'ΟΛΥΜΠΟΣ', label: 'Олимп' });
       });
     }
 
@@ -447,7 +435,7 @@
 
     wrap.innerHTML =
       '<h2>Печать подвига</h2>' +
-      '<p class="seal-lead">Когда подвиг свершён — удерживай печать, пока она не скрепится. Олимп откроет следующую дверь.</p>' +
+      '<p class="seal-lead">Когда подвиг свершён — удерживай печать, пока она не скрепится.' + (!SETUP && ORDER.indexOf(g.id) === ORDER.length - 1 ? '' : ' Олимп откроет следующую дверь.') + '</p>' +
       '<button class="seal-hold" type="button" aria-label="Удерживай, чтобы скрепить печать"><span class="sh-bar"></span><span class="sh-ico"></span><span class="sh-txt">Удерживай печать</span></button>';
     const btn = $('.seal-hold', wrap), bar = $('.sh-bar', wrap), HOLD = 1100;
     $('.sh-ico', wrap).appendChild(Sprites.clone('check', '#ffffff'));
@@ -477,6 +465,7 @@
     FX.burst(innerWidth / 2, innerHeight * 0.55, g.fx.colors.concat(['#ffe28a']), 50, 1.3);
     if (!SETUP && !state.done.includes(g.id)) { state.done.push(g.id); store.set('done', state.done); }
     if (g.key) justKey = g.id;
+    if (allDone()) justFinished = true;
     wrap.classList.add('sealed');
     showOk(true);
     wrap.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -574,122 +563,6 @@
     return box;
   }
 
-  /* ───────────── ТАЙНАЯ ДВЕРЬ ───────────── */
-  function renderGate() {
-    setRoute('gate');
-    Scene.pause(); FX.setMode('stars', ['#fff3c4', '#b9c6ff', '#ffffff', '#f3c24f']); Sound.setMood('gate');
-    applyVars(body, { '--god': '#f2c14e', '--bg1': '#1a1230', '--bg2': '#07061a' });
-    const stageCtx = $('#stage .stage-sprite').getContext('2d'); stageCtx.clearRect(0, 0, 16, 16); stageCtx.drawImage(Sprites.sprite('lock', '#f2c14e'), 0, 0);
-
-    const page = el('section', 'gate');
-    page.innerHTML =
-      '<div class="god-top"><button class="px-btn small back" type="button">← На Олимп</button></div>' +
-      '<header class="gate-head">' +
-        '<div class="greek">ΘΥΡΑ</div>' +
-        '<h1 class="title">Тайная дверь</h1>' +
-        '<div class="meander"></div>' +
-      '</header>' +
-      '<div class="gate-body"></div>';
-    const gb = $('.gate-body', page);
-    $('.back', page).addEventListener('click', () => { Sound.init(); Sound.click(); go('#/', { color: '#1a1536', greek: 'ΟΛΥΜΠΟΣ', label: 'Олимп' }); });
-
-    if (!FINAL) {
-      gb.innerHTML = '<p class="gate-lead">Врата ещё не знают своего ключа. Организатору: впиши <b>ORDER</b> в assets/js/config.js.</p>';
-    } else if (state.gateOpen) {
-      gb.appendChild(coordsCard(false));
-    } else {
-      buildLock(gb, page);
-    }
-    mount(page);
-  }
-
-  function coordsCard(animate) {
-    const c = el('div', 'coords-card' + (animate ? ' reveal' : ''));
-    const val = String(CFG.FINALE && CFG.FINALE.coordinates || '').trim();
-    c.innerHTML =
-      '<div class="coords-label">' + esc((CFG.FINALE && CFG.FINALE.caption) || 'Координаты') + '</div>' +
-      (val ? '<div class="coords-val" id="coords-val">' + esc(val) + '</div><button class="px-btn small ghost" type="button" id="copy-btn">Скопировать</button>'
-           : '<div class="coords-val empty">Координаты пока не заданы<br><small>assets/js/config.js → FINALE.coordinates</small></div>');
-    const b = $('#copy-btn', c);
-    if (b) b.addEventListener('click', () => {
-      const done = () => toast('Скопировано');
-      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(val).then(done, () => selectText());
-      else selectText();
-      function selectText() { const r = document.createRange(); r.selectNodeContents($('#coords-val', c)); const s = getSelection(); s.removeAllRanges(); s.addRange(r); toast('Выделено — скопируй'); }
-    });
-    return c;
-  }
-
-  function buildLock(gb, page) {
-    const need = FINAL.length;
-    const entered = [];
-    let fails = 0, locked = false;
-    gb.innerHTML =
-      '<p class="gate-lead">Девять печатей. Впиши числа из Паспорта Странника — в том порядке, в каком ты проходила подвиги.</p>' +
-      '<div class="door"><div class="door-leaf l"></div><div class="door-leaf r"></div><div class="door-glow"></div>' +
-        '<div class="slots"></div></div>' +
-      '<div class="keypad"></div>' +
-      '<div class="gate-actions"><button class="px-btn small ghost" type="button" id="erase">Стереть</button><button class="px-btn small ghost" type="button" id="clear">Сначала</button></div>' +
-      '<p class="gate-msg" role="alert"></p>' +
-      '<div class="gate-result"></div>';
-    const slots = $('.slots', gb), pad = $('.keypad', gb), msg = $('.gate-msg', gb);
-    const slotEls = [];
-    for (let i = 0; i < need; i++) { const s = el('span', 'slot'); slots.appendChild(s); slotEls.push(s); }
-    GODS.forEach((g) => {
-      const b = el('button', 'key'); b.type = 'button'; b.style.setProperty('--god', g.color);
-      applyVars(b, godVars(g));
-      const num = Sprites.digits(g.id, { color: '#fff7e0', shadow: 'rgba(0,0,0,.55)' });
-      b.appendChild(num);
-      b.addEventListener('click', () => press(g.id));
-      b.setAttribute('aria-label', 'Число ' + g.id);
-      pad.appendChild(b);
-    });
-
-    function paint() {
-      slotEls.forEach((s, i) => {
-        s.replaceChildren(); s.classList.toggle('on', i < entered.length);
-        if (i < entered.length) { s.appendChild(Sprites.digits(entered[i], { color: '#fff7e0', shadow: 'rgba(0,0,0,.55)' })); const g = byId(entered[i]); s.style.setProperty('--god', g.color); }
-      });
-    }
-    function press(n) {
-      if (locked || entered.length >= need) return;
-      Sound.init(); Sound.note(byId(n).note, 0.6);
-      entered.push(n); paint(); msg.textContent = ''; msg.classList.remove('on');
-      if (entered.length === need) check();
-    }
-    function check() {
-      locked = true;
-      setTimeout(() => {
-        const ok = entered.every((v, i) => v === FINAL[i]);
-        if (ok) return open();
-        fails++; Sound.fail(); shake($('.door', gb)); slots.classList.add('bad');
-        const hint = fails >= (CFG.GATE_HINT_AFTER || 3) ? ' Загляни в свой Паспорт Странника: числа идут в том порядке, в каком ты проходила подвиги.' : '';
-        msg.textContent = 'Врата безмолвны.' + hint; msg.classList.add('on');
-        setTimeout(() => { entered.length = 0; slots.classList.remove('bad'); paint(); locked = false; }, 1100);
-      }, 350);
-    }
-    async function open() {
-      Sound.doorOpen(); FX.lightning(innerWidth / 2); FX.rain(['#ffe28a', '#f3c24f', '#ffffff'], 140);
-      state.gateOpen = true; store.set('gateOpen', true);
-      $('.door', gb).classList.add('opening');
-      $('.keypad', gb).classList.add('gone'); $('.gate-actions', gb).classList.add('gone'); $('.gate-lead', gb).classList.add('gone'); msg.classList.add('gone');
-      await sleep(2600);
-      const res = $('.gate-result', gb); res.appendChild(coordsCard(true));
-      $('.door', gb).classList.add('open');
-      res.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }
-    $('#erase', gb).addEventListener('click', () => { if (locked) return; entered.pop(); paint(); Sound.click(); });
-    $('#clear', gb).addEventListener('click', () => { if (locked) return; entered.length = 0; paint(); Sound.click(); });
-    const onKey = (e) => {
-      if (/^[1-9]$/.test(e.key)) press(+e.key);
-      else if (e.key === 'Backspace' && !locked) { entered.pop(); paint(); }
-    };
-    document.addEventListener('keydown', onKey);
-    addCleanup(() => document.removeEventListener('keydown', onKey));
-    paint();
-    window.__openGate = () => open();   // для проверки организатором: в консоли браузера __openGate()
-  }
-
   /* ───────────── ПАНЕЛЬ ОРГАНИЗАТОРА ───────────── */
   function renderAdmin() {
     setRoute('admin');
@@ -711,8 +584,6 @@
 
     const warn = [];
     if (SETUP) warn.push('ORDER не задан — сайт в режиме настройки (открыты все кнопки).');
-    if (!FINAL) warn.push('Финальный код не определён (нужен ORDER или FINAL_CODE).');
-    if (!String(CFG.FINALE && CFG.FINALE.coordinates || '').trim()) warn.push('Не заданы координаты (FINALE.coordinates).');
     if (CFG.ADMIN_PIN === '0000') warn.push('Пин организатора всё ещё 0000 — поменяй ADMIN_PIN.');
 
     const seq = SETUP ? GODS.map((g) => g.id) : ORDER;
@@ -725,10 +596,9 @@
         '<table class="chain"><thead><tr><th>Шаг</th><th>Бог</th><th>Игра у врат</th><th>Статус</th><th>Видео</th></tr></thead><tbody>' +
         seq.map((id, i) => { const g = byId(id); return '<tr><td>' + (i + 1) + '</td><td>№' + g.id + ' ' + esc(g.name) + '</td><td class="mono">' + esc(g.trial || '—') + '</td><td>' + (SETUP ? '—' : ({ done: 'пройден', active: 'открыт', locked: 'закрыт' }[status(g.id)])) + '</td><td class="vid" data-v="' + g.id + '">' + (g.video === false ? (g.intro === 'letter' ? 'нет (письмо)' : 'нет (диалог)') : '…') + '</td></tr>'; }).join('') +
         '</tbody></table>' +
-        '<p class="mono final-line">Финальный код: <b>' + (FINAL ? FINAL.join(' ') : '—') + '</b></p>' +
         '<h2>Управление прогрессом</h2>' +
         '<div class="admin-row"><label>Считать пройденными первые <select id="adm-n"></select> подвигов</label><button class="px-btn small" type="button" id="adm-set">Применить</button></div>' +
-        '<div class="admin-row"><button class="px-btn small ghost" type="button" id="adm-reset">Сбросить прогресс</button><button class="px-btn small ghost" type="button" id="adm-gate">Тайная дверь: ' + (state.gateOpen ? 'закрыть' : 'открыть') + '</button><button class="px-btn small ghost" type="button" id="adm-prologue">Показать пролог</button><button class="px-btn small ghost" type="button" id="adm-thunder">Гром</button></div>' +
+        '<div class="admin-row"><button class="px-btn small ghost" type="button" id="adm-reset">Сбросить прогресс</button><button class="px-btn small ghost" type="button" id="adm-prologue">Показать пролог</button><button class="px-btn small ghost" type="button" id="adm-thunder">Гром</button></div>' +
         '<div class="admin-row"><button class="px-btn small ghost" type="button" id="adm-trials">Испытания у врат: ' + ((store.get('trials', []) || []).length >= GODS.length ? 'вернуть' : 'пройти все') + '</button><button class="px-btn small ghost" type="button" id="adm-sphinx">Показать капчу Сфинкса</button></div>' +
         '<p class="seal-dev">Прогресс хранится в браузере именно того устройства, на котором играет Юля.</p>' +
       '</div>';
@@ -736,10 +606,9 @@
     for (let i = 0; i <= GODS.length; i++) { const o = el('option', '', String(i)); o.value = i; if (!SETUP && i === state.done.length) o.selected = true; sel.appendChild(o); }
     $('.back', page).addEventListener('click', () => go('#/', { color: '#1a1536', label: 'Олимп' }));
     $('#adm-set', page).addEventListener('click', () => { if (SETUP) return toast('Сначала задай ORDER'); state.done = ORDER.slice(0, +sel.value); store.set('done', state.done); toast('Готово'); renderAdmin(); });
-    $('#adm-reset', page).addEventListener('click', () => { state.done = []; state.gateOpen = false; store.set('done', []); store.set('gateOpen', false); store.set('trials', []); store.set('spoken', []); store.set('sphinx', false); store.set('nike', null); store.set('atlas', null); toast('Прогресс сброшен'); renderAdmin(); });
+    $('#adm-reset', page).addEventListener('click', () => { state.done = []; store.set('done', []); store.set('trials', []); store.set('spoken', []); store.set('sphinx', false); store.set('nike', null); store.set('atlas', null); toast('Прогресс сброшен'); renderAdmin(); });
     $('#adm-trials', page).addEventListener('click', () => { const all = (store.get('trials', []) || []).length >= GODS.length; store.set('trials', all ? [] : GODS.map((g) => g.id)); toast(all ? 'Испытания вернулись' : 'Все испытания пройдены'); renderAdmin(); });
     $('#adm-sphinx', page).addEventListener('click', () => { Sound.init(); Trials.runSphinx(); });
-    $('#adm-gate', page).addEventListener('click', () => { state.gateOpen = !state.gateOpen; store.set('gateOpen', state.gateOpen); renderAdmin(); });
     $('#adm-prologue', page).addEventListener('click', () => { Sound.init(); showPrologue(true); });
     $('#adm-thunder', page).addEventListener('click', () => { Sound.init(); FX.lightning(); setTimeout(() => Sound.thunder(), 400); });
     mount(page);
